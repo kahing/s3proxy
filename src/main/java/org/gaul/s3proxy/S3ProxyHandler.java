@@ -1542,6 +1542,11 @@ final class S3ProxyHandler extends AbstractHandler {
         response.setStatus(HttpServletResponse.SC_NO_CONTENT);
     }
 
+    private boolean mpuUseStubBlob(BlobStore blobStore) {
+        String blobStoreType = getBlobStoreType(blobStore);
+        return blobStoreType.equals("azureblob") || blobStoreType.equals("openstack-swift");
+    }
+
     private void handleInitiateMultipartUpload(HttpServletRequest request,
             HttpServletResponse response, BlobStore blobStore,
             String containerName, String blobName)
@@ -1571,7 +1576,9 @@ final class S3ProxyHandler extends AbstractHandler {
         // S3 requires blob metadata during the initiate call while Azure and
         // Swift require it in the complete call.  Store a stub blob which
         // allows reproducing this metadata later.
-        blobStore.putBlob(containerName, blob, options);
+        if (mpuUseStubBlob(blobStore)) {
+            blobStore.putBlob(containerName, blob, options);
+        }
 
         MultipartUpload mpu = blobStore.initiateMultipartUpload(containerName,
                 blob.getMetadata(), options);
@@ -1598,11 +1605,18 @@ final class S3ProxyHandler extends AbstractHandler {
             HttpServletResponse response, BlobStore blobStore,
             String containerName, String blobName, String uploadId)
             throws IOException, S3Exception {
-        Blob stubBlob = blobStore.getBlob(containerName, blobName);
-        BlobAccess access = blobStore.getBlobAccess(containerName, blobName);
+        BlobMetadata meta;
+        PutOptions putOptions = new PutOptions();
+        if (!mpuUseStubBlob(blobStore)) {
+            meta = createFakeBlobMetadata(blobStore);
+        } else {
+            Blob stubBlob = blobStore.getBlob(containerName, blobName);
+            meta = stubBlob.getMetadata();
+            BlobAccess access = blobStore.getBlobAccess(containerName, blobName);
+            putOptions = putOptions.setBlobAccess(access);
+        }
         MultipartUpload mpu = MultipartUpload.create(containerName,
-                blobName, uploadId, stubBlob.getMetadata(),
-                new PutOptions().setBlobAccess(access));
+                blobName, uploadId, meta, putOptions);
 
         // List parts to get part sizes and to map multiple Azure parts
         // into single parts.
@@ -1685,7 +1699,9 @@ final class S3ProxyHandler extends AbstractHandler {
             throw new S3Exception(S3ErrorCode.NO_SUCH_UPLOAD);
         }
 
-        blobStore.removeBlob(containerName, blobName);
+        if (mpuUseStubBlob(blobStore)) {
+            blobStore.removeBlob(containerName, blobName);
+        }
 
         // TODO: how to reconstruct original mpu?
         MultipartUpload mpu = MultipartUpload.create(containerName,

@@ -17,6 +17,7 @@ sed "s,^\(s3proxy.endpoint\)=.*,\1=http://127.0.0.1:${S3PROXY_PORT}," \
         < src/test/resources/s3proxy.conf | grep -v secure-endpoint > target/s3proxy.conf
 $S3PROXY_BIN --properties target/s3proxy.conf &
 S3PROXY_PID=$!
+trap "kill $S3PROXY_PID" EXIT
 
 # wait for S3Proxy to start
 for i in $(seq 30);
@@ -33,9 +34,9 @@ done
 # execute s3-tests
 pushd s3-tests
 ./virtualenv/bin/nosetests -a '!fails_on_s3proxy'
+#./virtualenv/bin/nosetests -a wip
 EXIT_CODE=$?
 popd
 
 # clean up and return s3-tests exit code
-kill $S3PROXY_PID
 exit $EXIT_CODE
